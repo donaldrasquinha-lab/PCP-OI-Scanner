@@ -387,8 +387,8 @@ scanner = Scanner()
 # ═══ ROUTES ═════════════════════════════════════════════════════
 @app.route("/")
 def index():
-    p = Path(__file__).parent / "dashboard.html"
-    return send_file(p) if p.exists() else ("<h1>Put dashboard.html next to server.py</h1>", 404)
+    p = Path(__file__).parent / "index.html"
+    return send_file(p) if p.exists() else ("<h1>Put index.html next to server.py</h1>", 404)
 
 @app.route("/api/expiries")
 def api_expiries():
