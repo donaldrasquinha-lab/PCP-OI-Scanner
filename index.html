@@ -274,7 +274,7 @@ STATE.expiryDate = STATE.availableExpiries[0] || '';
 // ═══════════════════════════════════════════════════════════════════
 //  API HELPERS
 // ═══════════════════════════════════════════════════════════════════
-const BASE = 'https://api.upstox.com/v2';
+const BASE = 'https://api.upstox.com/';
 
 async function apiFetch(url, token) {
   const res = await fetch(url, {
