@@ -2,18 +2,19 @@
 PCP & OI Scanner — Production Backend
 =======================================
 Rate-limited, staggered-poll, batch-optimized Upstox API proxy.
+Supports cross-origin requests from GitHub Pages.
 
-  ┌──────────┐      ┌────────────────┐      ┌──────────────┐
-  │ Browser  │◄────►│  Flask :5050   │◄────►│  Upstox API  │
-  └──────────┘ JSON │                │ REST └──────────────┘
-                    │ Background     │  5 symbols / 2s
-                    │ Scanner Thread │  ≤50 calls/min
-                    │ Token Bucket   │  Exponential backoff
-                    │ TTL Cache      │  Batch LTP (500 keys)
-                    └────────────────┘
+  ┌───────────────────┐      ┌────────────────┐      ┌──────────────┐
+  │ GitHub Pages      │◄────►│  Flask :5050   │◄────►│  Upstox API  │
+  │ or localhost      │ CORS │  (your PC)     │ REST └──────────────┘
+  └───────────────────┘      │ Background     │  5 symbols / 2s
+                             │ Scanner Thread │  ≤50 calls/min
+                             │ Token Bucket   │  Exponential backoff
+                             │ TTL Cache      │  Batch LTP (500 keys)
+                             └────────────────┘
 
-Run:  pip install flask requests && python server.py
-Open: http://localhost:5050
+Run:  pip install flask flask-cors requests && python server.py
+Open: http://localhost:5050  OR  your GitHub Pages URL
 """
 
 import os, sys, json, time, math, threading, logging
@@ -25,11 +26,46 @@ try:
     from flask import Flask, request, jsonify, send_file
     import requests as http_req
 except ImportError:
-    print("\n  pip install flask requests\n"); sys.exit(1)
+    print("\n  pip install flask flask-cors requests\n"); sys.exit(1)
+
+# flask-cors is optional but recommended for GitHub Pages
+try:
+    from flask_cors import CORS
+    HAS_CORS = True
+except ImportError:
+    HAS_CORS = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s │ %(levelname)-5s │ %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("pcp")
 app = Flask(__name__)
+
+# ─── CORS Setup ──────────────────────────────────────────────────
+# Allow requests from GitHub Pages, localhost, and 127.0.0.1
+ALLOWED_ORIGINS = [
+    "https://*.github.io",       # GitHub Pages
+    "http://localhost:*",         # local dev
+    "http://127.0.0.1:*",        # local dev
+    "null",                       # file:// opens
+]
+
+if HAS_CORS:
+    CORS(app, resources={r"/api/*": {"origins": "*"}},
+         supports_credentials=False,
+         allow_headers=["Content-Type", "Authorization"],
+         methods=["GET", "POST", "OPTIONS"])
+    log.info("CORS enabled (flask-cors)")
+else:
+    # Manual CORS fallback — works without flask-cors
+    @app.after_request
+    def add_cors(response):
+        origin = request.headers.get("Origin", "")
+        # Allow any localhost / GitHub Pages origin
+        if any(p in origin for p in ["localhost", "127.0.0.1", "github.io", ""]):
+            response.headers["Access-Control-Allow-Origin"] = origin or "*"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        return response
+    log.info("CORS enabled (manual fallback — install flask-cors for better support)")
 
 # ═══ CONFIG ══════════════════════════════════════════════════════
 UPSTOX_BASE = "https://api.upstox.com"
@@ -385,6 +421,16 @@ class Scanner:
 scanner = Scanner()
 
 # ═══ ROUTES ═════════════════════════════════════════════════════
+# Handle preflight OPTIONS for all /api/* routes
+@app.route("/api/<path:path>", methods=["OPTIONS"])
+def preflight(path):
+    resp = app.make_default_options_response()
+    resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Max-Age"] = "3600"
+    return resp
+
 @app.route("/")
 def index():
     p = Path(__file__).parent / "index.html"
