@@ -274,7 +274,7 @@ STATE.expiryDate = STATE.availableExpiries[0] || '';
 // ═══════════════════════════════════════════════════════════════════
 //  API HELPERS
 // ═══════════════════════════════════════════════════════════════════
-const BASE = 'https://api.upstox.com/';
+const BASE = 'https://api.upstox.com';
 
 async function apiFetch(url, token) {
   const res = await fetch(url, {
@@ -1088,8 +1088,7 @@ function renderFooter() {
     <strong style="color:var(--text-2)">PCP:</strong> C − P = S − K·e⁻ʳᵀ · Violations flag mispricing/arb ·
     <strong style="color:var(--text-2)">Expiry:</strong> Auto-computed from today (${new Date().toLocaleDateString('en-IN')}) — next Thursdays + monthly last Thursdays ·
     <strong style="color:var(--text-2)">API:</strong> <code>/v2/option/chain</code> + <code>/v2/option/contract</code> + <code>/v3/market-quote/ltp</code> + <code>/v3/market-quote/option-greek</code>
-    ${!STATE.isLive?' · Running simulated data — connect Upstox token
-      to go live':''}
+    ${!STATE.isLive?' · Running simulated data — connect Upstox token to go live':''}
   </div>`;
 }
 
