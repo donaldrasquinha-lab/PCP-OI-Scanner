@@ -66,14 +66,65 @@ function fmtD(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0
 function dte(e){return Math.max(0,Math.ceil((new Date(e+'T15:30:00+05:30')-new Date())/864e5))}
 S.exps=autoExpiries();S.exp=S.exps[0]||'';
 
-// ═══ API CALLS (local Flask backend — v2 snapshot model) ════════
-const BASE=location.origin;
+// ═══ API — GitHub Pages + localhost compatible ══════════════════
+// Server URL resolution order:
+// 1. ?server= URL param (e.g. ?server=http://localhost:5050)
+// 2. Saved in localStorage from last session
+// 3. Same origin (for when running via server.py directly)
+// 4. Default localhost:5050 fallback
+
+function resolveServerURL(){
+  const params = new URLSearchParams(location.search);
+  const fromParam = params.get('server');
+  if(fromParam) return fromParam.replace(/\/+$/,'');
+  try{ const saved = localStorage.getItem('pcp_server'); if(saved) return saved; }catch(e){}
+  // If we're on GitHub Pages or file://, default to localhost
+  if(location.hostname.includes('github.io') || location.protocol === 'file:')
+    return 'http://localhost:5050';
+  return location.origin;
+}
+
+let BASE = resolveServerURL();
+let serverOK = false;
+
+function saveServerURL(url){
+  BASE = url.replace(/\/+$/,'');
+  try{ localStorage.setItem('pcp_server', BASE); }catch(e){}
+}
+
 async function api(path,opts={}){
-  const r=await fetch(BASE+path,{headers:opts.token?{'Authorization':'Bearer '+opts.token,'Content-Type':'application/json'}:{'Content-Type':'application/json'},...opts});
+  const r=await fetch(BASE+path,{
+    headers: opts.token
+      ? {'Authorization':'Bearer '+opts.token,'Content-Type':'application/json'}
+      : {'Content-Type':'application/json'},
+    ...opts
+  });
+  const ct=r.headers.get('content-type')||'';
+  if(!ct.includes('application/json')){
+    throw new Error(`Server at ${BASE} returned HTML, not JSON. Is server.py running?`);
+  }
   return r.json();
 }
 async function apiPost(path,body){
-  return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  const r=await fetch(BASE+path,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  const ct=r.headers.get('content-type')||'';
+  if(!ct.includes('application/json')) throw new Error('Server not reachable at '+BASE);
+  return r.json();
+}
+
+async function checkServer(){
+  try{
+    const r=await fetch(BASE+'/api/health',{signal:AbortSignal.timeout(4000)});
+    const ct=r.headers.get('content-type')||'';
+    if(ct.includes('application/json')){const j=await r.json();serverOK=j.status==='ok';return serverOK}
+  }catch(e){
+    // If CORS blocked or connection refused, serverOK stays false
+  }
+  serverOK=false;return false;
 }
 
 async function fetchExpiries(){
@@ -90,13 +141,14 @@ async function stopEngine(){
   try{await apiPost('/api/stop',{})}catch(e){}
 }
 
-// Poll snapshot — this is FREE (no Upstox calls, just reads server memory)
-let pollTimer=null;
+// Poll snapshot — FREE (no Upstox calls, reads server memory)
+let pollTimer=null;let pollFails=0;
 function startPolling(){
-  stopPolling();
+  stopPolling();pollFails=0;
   pollTimer=setInterval(async()=>{
     try{
       const r=await api('/api/snapshot');
+      pollFails=0;
       if(r.status==='success'){
         if(r.stocks?.length)S.data=r.stocks;
         if(r.niftyOI)S.noi=r.niftyOI;
@@ -106,8 +158,15 @@ function startPolling(){
         S.ld=(r.progress?.phase||'')!=='done'&&(r.progress?.phase||'')!=='idle';
         render();
       }
-    }catch(e){}
-  }, 3000); // poll every 3s — free, reads server memory
+    }catch(e){
+      pollFails++;
+      if(pollFails>=3){
+        stopPolling();S.live=false;S.ld=false;
+        S.errs=['Server connection lost. Restart server.py and reconnect.','Error: '+e.message];
+        render();
+      }
+    }
+  }, 3000);
 }
 function stopPolling(){clearInterval(pollTimer);pollTimer=null}
 
@@ -201,13 +260,27 @@ function renderConf(){
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
       <div><h3 style="color:var(--t0);font-size:15px;font-weight:600">${S.live?'⚡ Connected':'🔌 Connect to Upstox API'}</h3>
       <p style="color:var(--t2);font-size:12px;margin-top:5px;line-height:1.5;max-width:580px">${S.live?'Live mode. Change expiry or disconnect below.'
-      :'Runs via local Python backend (server.py) which proxies Upstox API calls — no CORS issues. Start the server first, then paste your token.'}</p></div>
+      :'Runs via local Python backend (server.py) which proxies Upstox API calls — no CORS issues.'}</p></div>
       ${!S.live?`<button class="btn-sm" onclick="S.conf=false;render()">✕</button>`:''}</div>`;
   if(!S.live){
+    // Server URL + status
+    h+=`<div style="margin-bottom:10px">
+      <div style="font-size:10px;color:var(--t2);margin-bottom:5px;text-transform:uppercase;letter-spacing:1px;font-family:var(--mono)">Server URL</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="text" id="srvUrl" value="${e(BASE)}" placeholder="http://localhost:5050"
+          style="flex:1;background:var(--bg-2);border:1px solid var(--bh);color:var(--t0);padding:8px 12px;border-radius:8px;font-size:12px;font-family:var(--mono);outline:none">
+        <button class="btn-sm" onclick="saveServerURL(document.getElementById('srvUrl').value);checkServer().then(render)" style="font-size:10px;padding:6px 12px">Connect</button>
+        <div style="width:10px;height:10px;border-radius:50%;background:${serverOK?'var(--grn)':'#ff9100'};${serverOK?'':'animation:pulse 1.5s infinite'};flex-shrink:0"></div>
+      </div>
+      <div style="font-size:10px;margin-top:4px;color:${serverOK?'var(--grn)':'#ff9100'};font-family:var(--mono)">
+        ${serverOK?'✓ Connected to server.py':'✗ Not reachable — run <code style="color:var(--t0)">pip install flask flask-cors requests && python server.py</code>'}
+      </div>
+    </div>`;
+    // Token
     h+=`<div style="display:flex;gap:8px;margin-bottom:12px">
       <input type="password" id="tkn" placeholder="Paste Upstox access_token..." value="${e(S.token)}"
         style="flex:1;background:var(--bg-2);border:1px solid var(--bh);color:var(--t0);padding:10px 14px;border-radius:8px;font-size:13px;font-family:var(--mono);outline:none">
-      <button onclick="goLive()" style="background:linear-gradient(135deg,var(--grn),var(--blu));border:none;color:var(--bg-0);padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">GO LIVE ⚡</button></div>`;
+      <button onclick="goLive()" ${serverOK?'':'disabled'} style="background:${serverOK?'linear-gradient(135deg,var(--grn),var(--blu))':'var(--bg-3)'};border:none;color:${serverOK?'var(--bg-0)':'var(--t3)'};padding:10px 24px;border-radius:8px;cursor:${serverOK?'pointer':'not-allowed'};font-size:13px;font-weight:700">GO LIVE ⚡</button></div>`;
     // Symbols
     h+=`<div style="margin-top:10px"><div style="font-size:10px;color:var(--t2);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;font-family:var(--mono)">Symbols (${S.syms.length}/${ALL_SYMS.length})</div>
       <div style="display:flex;flex-wrap:wrap;gap:3px">`;
@@ -221,11 +294,14 @@ function renderConf(){
       <span style="font-size:11px;color:var(--t2)">Expiry:</span><select onchange="S.exp=this.value;render()">`;
     S.exps.forEach(x=>{h+=`<option value="${x}" ${x===S.exp?'selected':''}>${x} (${dte(x)}d)</option>`});
     h+=`</select><span style="font-size:10px;color:var(--t3);font-family:var(--mono)">Auto-computed Thursdays from today</span></div>`;
-    h+=`<div style="margin-top:12px;padding:10px 14px;background:var(--yel-bg);border:1px solid var(--yel-bd);border-radius:8px;font-size:11px;color:#b0a040;line-height:1.6">
-      <strong>Setup:</strong> <code>pip install flask requests</code> then <code>python server.py</code> (port 5050).<br>
-      <strong>v2 Engine:</strong> Token-bucket rate limiter (50/min) · Staggered scan (5 symbols/2s = full N50 in ~20s) ·
-      Exp backoff (5→10→30→60s) · Batch LTP via <code>/v3/market-quote/ltp</code> (50 keys/call) ·
-      Frontend polls <code>/api/snapshot</code> every 3s (zero API cost — reads server memory)</div>`;
+    h+=`<div style="margin-top:12px;padding:10px 14px;background:var(--yel-bg);border:1px solid var(--yel-bd);border-radius:8px;font-size:11px;color:#b0a040;line-height:1.8">
+      <strong>Setup (GitHub Pages):</strong><br>
+      1. On your PC: <code>pip install flask flask-cors requests</code><br>
+      2. Run: <code>python server.py</code> (starts on port 5050 with CORS enabled)<br>
+      3. Open this page → enter server URL above → paste Upstox token → GO LIVE<br>
+      <strong style="margin-top:4px;display:inline-block">How it works:</strong> This page (GitHub Pages) talks to server.py on your machine.
+      server.py proxies all Upstox API calls server-side (no CORS/mixed-content issues).
+      The URL param <code>?server=http://localhost:5050</code> also works for bookmarking.</div>`;
   } else {
     h+=`<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;color:var(--t2)">Expiry:</span>
@@ -237,8 +313,18 @@ function renderConf(){
   h+=`</div>`;return h;
 }
 
-function goLive(){const i=document.getElementById('tkn');if(!i||!i.value.trim())return;S.token=i.value.trim();S.live=true;S.conf=true;
-  fetchExpiries().then(()=>{startEngine().then(()=>{startPolling();refresh()})})}
+async function goLive(){
+  const i=document.getElementById('tkn');if(!i||!i.value.trim())return;
+  S.token=i.value.trim();S.errs=[];
+  // Check server health first
+  const ok=await checkServer();
+  if(!ok){
+    S.errs=['Cannot reach Flask server. Make sure server.py is running:','','  python server.py','','Then open http://localhost:5050 (not the file directly)'];
+    S.live=false;render();return;
+  }
+  S.live=true;S.conf=true;
+  await fetchExpiries();await startEngine();startPolling();refresh();
+}
 function offLive(){stopPolling();stopEngine();S.live=false;S.ar=false;clearInterval(arTimer);S.exps=autoExpiries();S.exp=S.exps[0]||'';refresh()}
 function tSym(s){if(S.syms.includes(s))S.syms=S.syms.filter(x=>x!==s);else S.syms.push(s);render()}
 
@@ -441,7 +527,7 @@ function renderFooter(){
   h+=`</div>`;return h}
 
 // ═══ INIT ═══════════════════════════════════════════════════════
-refresh();
+checkServer().then(()=>refresh());
 </script>
 </body>
 </html>
