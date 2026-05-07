@@ -274,7 +274,7 @@ STATE.expiryDate = STATE.availableExpiries[0] || '';
 // ═══════════════════════════════════════════════════════════════════
 //  API HELPERS
 // ═══════════════════════════════════════════════════════════════════
-const BASE = 'https://api.upstox.com/';
+const BASE = 'https://api.upstox.com';
 
 async function apiFetch(url, token) {
   const res = await fetch(url, {
@@ -290,7 +290,7 @@ async function apiFetch(url, token) {
 // ─── Fetch expiries from API ────────────────────────────────────
 async function fetchLiveExpiries() {
   try {
-    const res = await apiFetch(`${BASE}/v2/option/contract?instrument_key=${encodeURIComponent(NIFTY_INDEX_KEY)}`, STATE.token);
+    const res = await apiFetch(`${BASE}/V2/option/contract?instrument_key=${encodeURIComponent(NIFTY_INDEX_KEY)}`, STATE.token);
     if (res.status === 'success' && res.data) {
       const expiries = [...new Set(res.data.map(c => c.expiry))].sort();
       if (expiries.length) {
@@ -313,7 +313,7 @@ function computePCP(cLTP, pLTP, spot, strike, dteDays, r=0.065) {
 
 // ─── Fetch live option chain for a symbol ───────────────────────
 async function fetchLiveChain(instrumentKey, expiry) {
-  const url = `${BASE}/v2/option/chain?instrument_key=${encodeURIComponent(instrumentKey)}&expiry_date=${expiry}`;
+  const url = `${BASE}/V2/option/chain?instrument_key=${encodeURIComponent(instrumentKey)}&expiry_date=${expiry}`;
   const res = await apiFetch(url, STATE.token);
   if (res.status !== 'success' || !res.data?.length) throw new Error('No chain data');
   return res.data;
